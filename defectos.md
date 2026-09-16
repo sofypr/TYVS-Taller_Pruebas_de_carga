@@ -1,49 +1,61 @@
-# Registro de Defectos — EJEMPLO DEL PROFESOR
+# Registro de Defectos
 
+Curso: Testing y Validación de Software
+Proyecto: Pruebas de Carga y Rendimiento — Registraduría
+Equipo: Sofy Alejandra Prada Murillo y Juan Camilo Estévez Otalora
+Fecha: 16 de septiembre de 2026
 
-> **Este archivo es un ejemplo**, no su entrega. Las cifras que aparecen abajo son ilustrativas: no provienen de una corrida real de este repositorio. Para su taller parta de [`defectos_template.md`](defectos_template.md) y documente los defectos con **sus propias mediciones**.
-
-Curso: Testing y Validación de Software\
-Proyecto: Pruebas de Carga y Rendimiento\
-Equipo: \[Nombre del equipo\]\
-Fecha: \[Fecha\]
-
-------------------------------------------------------------------------
+---
 
 ## Introducción
 
-Este documento recopila los defectos identificados durante la ejecución
-de pruebas de rendimiento (Baseline, Load, Stress, Spike, Soak y
-Regresión).\
-Cada defecto se documenta para garantizar trazabilidad, análisis técnico
-y propuesta de mejora.
+Este documento recopila los defectos y hallazgos identificados durante la ejecución
+de pruebas de rendimiento (Baseline, Load y Stress) sobre el endpoint `POST /register`
+del sistema Registraduría, usando k6 contra una instancia local (`http://localhost:8080`).
 
-------------------------------------------------------------------------
+---
 
 ## Formato 1: Lista detallada
 
-## Defecto PERF-01 --- Incumplimiento de SLO de latencia bajo Load
+## Defecto PERF-01 — Tasa de duplicados elevada bajo Stress (datos de prueba no idempotentes)
 
--   Capa afectada: Aplicación / Base de datos\
--   Escenario: Load Test (200 VUs)\
--   SLO definido: p95 \< 300 ms\
--   Resultado esperado: Cumplimiento del SLO bajo carga nominal.\
--   Resultado obtenido: p95 = 612 ms
+- Capa afectada: Datos de prueba / Persistencia (H2 en memoria)
+- Escenario: Stress Test (hasta 600 VUs)
+- SLO definido: `register_failed` (rate) < 1%
+- Resultado esperado: Cumplimiento del umbral bajo carga alta
+- Resultado obtenido: **rate = 24.73%** (1.481.811 de 5.992.940 iteraciones)
 
 ### Evidencia
 
-http_req_duration: avg=402ms\
-p(95)=612ms\
-p(99)=890ms
+register_failed:
+  rate = 0.2473 (umbral rate<0.01 → FAIL)
+  passes = 1,481,811
+  fails = 4,511,129
+
+http_req_failed (nivel HTTP):
+  rate = 0.0000372 (umbral rate<0.01 → OK)
+  passes = 223
+  fails = 5,992,717
+
+checks:
+  status 200 → 5,992,717 passes / 223 fails
+  body VALID → 4,511,129 passes / 1,481,811 fails
 
 ### Impacto
 
-Incumplimiento del objetivo de nivel de servicio bajo carga esperada.
+El sistema respondió HTTP 200 de forma consistente (99.996% de éxito a nivel de
+transporte), pero el cuerpo de respuesta reportó `DUPLICATED` en ~24.7% de los
+casos. Esto es un falso positivo de rendimiento: el escenario stress reutiliza un
+rango de identificadores que ya habían sido registrados en corridas previas del
+mismo escenario (la base H2 vive en memoria y no se reinicia entre corridas a
+menos que se reinicie el servicio manualmente).
 
 ### Causa probable
 
--   Saturación del pool de conexiones.\
--   Consulta sin índice.
+- El script de carga no genera identificadores únicos por ejecución (ej. timestamp
+  o UUID como semilla), por lo que corridas repetidas del mismo escenario colisionan
+  con datos ya insertados.
+- No hay limpieza automática de estado entre corridas de k6.
 
 ### Estado
 
@@ -51,51 +63,42 @@ Abierto
 
 ### Prioridad
 
-Alta
+Media (defecto de diseño de la prueba, no del sistema bajo prueba)
 
-------------------------------------------------------------------------
+---
 
-## Defecto PERF-02 --- Error rate elevado bajo Stress
+## Defecto PERF-02 — Degradación progresiva de latencia con el aumento de carga
 
--   Capa afectada: Servidor de aplicación\
--   Escenario: Stress Test (600 VUs)\
--   SLO definido: Error rate \< 1%\
--   Resultado obtenido: 3.8%
+- Capa afectada: Aplicación / Acceso a datos (`RegistryRepository`)
+- Escenario: Comparación Baseline (20 VUs) → Load (200 VUs) → Stress (600 VUs)
+- SLO definido: p95 < 300 ms, p99 < 800 ms
+- Resultado esperado: Latencia estable o con crecimiento marginal al escalar carga
+- Resultado obtenido: Crecimiento sostenido y proporcional al número de VUs
 
 ### Evidencia
 
-http_req_failed: 3.8%\
-status=500 detectado
+| Escenario | VUs máx. | p95 (ms) | p90 (ms) | avg (ms) | máx (ms) |
+|---|---|---|---|---|---|
+| Baseline | 20 | 2.79 | 2.09 | 1.38 | 100.40 |
+| Load | 200 | 29.79 | 24.00 | 12.99 | 747.41 |
+| Stress | 600 | 78.73 | 61.99 | 31.01 | 1449.28 |
+
+El p95 se multiplicó por ~10.7x entre baseline y load, y por ~2.6x adicional
+entre load y stress (~28.2x acumulado desde baseline).
 
 ### Impacto
 
-Fallas del sistema bajo carga alta.
+Aunque **ningún umbral de latencia fue incumplido** en estas corridas (p95 se
+mantuvo muy por debajo de 300 ms incluso a 600 VUs), la tendencia de crecimiento
+no lineal sugiere que el sistema se acerca a un cuello de botella de recursos
+(el código fuente de `RegistryRepository.getConnection()` abre una conexión JDBC
+nueva por cada operación en lugar de usar un pool). Con una carga sostenida mayor
+o un `soak test` prolongado, es previsible que el umbral sí se incumpla.
 
 ### Causa probable
 
--   Agotamiento de threads.\
--   Configuración insuficiente.
-
-### Estado
-
-En progreso
-
-### Prioridad
-
-Crítica
-
-------------------------------------------------------------------------
-
-## Defecto PERF-03 --- Degradación progresiva en Soak Test
-
--   Capa afectada: JVM / Memoria\
--   Escenario: Soak Test (2 horas)\
--   Resultado esperado: Latencia estable\
--   Resultado obtenido: Incremento progresivo de 210ms a 480ms
-
-### Impacto
-
-Posible fuga de memoria o acumulación de recursos.
+- Ausencia de connection pooling en el acceso a la base de datos.
+- Cada request incurre en el costo de apertura/cierre de conexión.
 
 ### Estado
 
@@ -103,27 +106,26 @@ Abierto
 
 ### Prioridad
 
-Media
+Alta (riesgo de incumplimiento de SLO en producción bajo carga sostenida)
 
-------------------------------------------------------------------------
+---
 
 ## Formato 2: Tabla de seguimiento
 
 | ID | Escenario | Resultado esperado | Resultado obtenido | Estado | Prioridad |
 |----|-----------|--------------------|--------------------|--------|-----------|
-| PERF-01 | Load | p95 < 300 ms | 612 ms | Abierto | Alta |
-| PERF-02 | Stress | Error < 1% | 3.8% | En progreso | Crítica |
-| PERF-03 | Soak | Latencia estable | Degradación progresiva | Abierto | Media |
+| PERF-01 | Stress | register_failed < 1% | 24.73% | Abierto | Media |
+| PERF-02 | Baseline→Load→Stress | p95 estable | Crecimiento ~28x (2.79ms→78.73ms) | Abierto | Alta |
 
-------------------------------------------------------------------------
+---
 
 ## Convenciones de Estado
 
-Abierto: Defecto identificado sin corrección aplicada.\
-En progreso: En proceso de corrección.\
+Abierto: Defecto identificado sin corrección aplicada.
+En progreso: En proceso de corrección.
 Resuelto: Corregido y validado con nuevas pruebas.
 
-------------------------------------------------------------------------
+---
 
-Universidad de La Sabana -- Facultad de Ingeniería\
-Curso: Testing y Validación de Software (2025-1)
+Universidad de La Sabana — Facultad de Ingeniería
+Curso: Testing y Validación de Software
