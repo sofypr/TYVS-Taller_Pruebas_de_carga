@@ -155,6 +155,28 @@ Resuelto (se cambió `--duration 60s --vus 20` por `--vus 20 --iterations 480`
 en el paso "Verificación de resultado de negocio" de `.github/workflows/perf.yml`,
 manteniendo el total de iteraciones por debajo del tamaño del dataset)
 
+### Causa probable
+
+- Causa inicial identificada (parcial): el workflow sobreescribía la
+  configuración de VUs/duración del script con `--duration`/`--vus`, generando
+  más iteraciones que filas tiene el dataset (512).
+- Causa raíz real: el paso "Verificación de resultado de negocio" corre sobre
+  el MISMO servicio, sin reiniciarlo, que ya fue usado por el paso anterior
+  ("Baseline de rendimiento", con `register_person_k6.js`). Los ids generados
+  por ese paso colisionan con el rango de ids fijos de `voters.csv`, así que
+  incluso con una sola vuelta al dataset (`--iterations 480`, menor que las
+  512 filas) seguían apareciendo duplicados (63.75%).
+
+### Estado
+
+Resuelto en dos pasos: (1) se cambió `--duration 60s --vus 20` por
+`--vus 20 --iterations 480` para no exceder el tamaño del dataset; (2) se
+agregó `--env ID_BASE=700000000` (tal como sugiere el README del taller) para
+desplazar el rango de ids del script de votantes y evitar la colisión con los
+ids ya registrados por el paso de baseline. Verificado: pipeline en verde
+(GitHub Actions, ejecución #4, `Success`, 1m 40s).
+
+
 ### Prioridad
 
 Media
@@ -167,8 +189,7 @@ Media
 |----|-----------|--------------------|--------------------|--------|-----------|
 | PERF-01 | Stress | register_failed < 1% | 24.73% | Abierto | Media |
 | PERF-02 | Baseline→Load→Stress | p95 estable | Crecimiento ~28x (2.79ms→78.73ms) | Abierto | Alta |
-| PERF-03 | CI (verificación de negocio) | register_failed < 1% | 65.48% (dataset reutilizado) | Resuelto | Media |
-
+| PERF-03 | CI (verificación de negocio) | register_failed < 1% | 63.75% → 0% tras fix | Resuelto | Media |
 ---
 
 ## Convenciones de Estado
