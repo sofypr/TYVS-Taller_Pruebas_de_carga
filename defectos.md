@@ -143,17 +143,6 @@ incorrecto porque esperaba `VALID`/`UNDERAGE`/`DEAD`/`INVALID_AGE` según la fil
 No es un defecto del sistema bajo prueba: es un defecto de diseño de la prueba
 en el pipeline de CI.
 
-### Causa probable
-
-- El workflow sobreescribe la configuración de VUs/duración del script con
-  `--duration`/`--vus`, ignorando que el dataset de referencia es finito (512 filas)
-  y se agota mucho antes de que termine el tiempo asignado.
-
-### Estado
-
-Resuelto (se cambió `--duration 60s --vus 20` por `--vus 20 --iterations 480`
-en el paso "Verificación de resultado de negocio" de `.github/workflows/perf.yml`,
-manteniendo el total de iteraciones por debajo del tamaño del dataset)
 
 ### Causa probable
 
