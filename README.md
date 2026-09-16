@@ -626,6 +626,76 @@ Las **pruebas de carga y rendimiento** brindan evidencia objetiva para **dimensi
 
 ---
 
+## Análisis de resultados (equipo)
+
+Equipo: Sofy Alejandra Prada Murillo y Juan Camilo Estévez
+Fecha de ejecución: 16 de septiembre de 2026
+Ambiente: local (Windows 11, Java 21, Maven 3.9.16, k6 v2.2.0), `http://localhost:8080`
+
+### Resumen comparativo
+
+| Escenario | VUs máx. | Duración | p95 cliente (k6) | p99 cliente | Error rate HTTP | Requests totales |
+|---|---|---|---|---|---|---|
+| Baseline | 20 | 5 min | 2.79 ms | — | 0% | 3,483,468 |
+| Load | 200 | 14 min | 30.97 ms | — | 0% | 8,902,682 |
+| Stress | 600 | 10 min | 78.73 ms | — | 0.0037% (223/5,992,940) | 5,992,940 |
+
+Ambos umbrales del SLO (p95 < 300 ms, p99 < 800 ms) se cumplieron en los tres
+escenarios. El p95 creció de forma no lineal (~11x de baseline a load, ~2.5x
+adicional de load a stress), lo que anticipa saturación con carga sostenida
+mayor, aunque en estas corridas puntuales no se llegó a incumplir el SLO.
+
+### Observabilidad: cliente vs. servidor (escenario Load)
+
+Se comparó el p95 reportado por k6 (lado cliente) contra el p95 real medido
+por el servidor vía Actuator/Prometheus (`/actuator/prometheus`, métrica
+`http_server_requests_seconds{quantile="0.95"}`) durante la misma corrida de
+`load`:
+
+| Fuente | p95 | p99 |
+|---|---|---|
+| Cliente (k6) | 30.97 ms | — |
+| Servidor (Actuator) | 22.00 ms | 54.51 ms |
+| **Diferencia** | **~8.97 ms** | — |
+
+La diferencia corresponde al tiempo de red y de espera en cola antes de que
+un hilo del servidor atendiera la petición. Al tratarse de un ambiente local
+(sin latencia de red real), una diferencia de ~9 ms es razonable y no indica
+saturación severa; en un entorno con saturación real, el p95 del cliente se
+dispararía muy por encima del p95 del servidor, señal de que las peticiones
+esperan en cola más de lo que tardan en procesarse.
+
+### Hallazgos (ver `defectos.md` para el detalle completo)
+
+- **PERF-01**: bajo `stress`, la tasa de `register_failed` (24.73%) superó el
+  umbral definido, pero corresponde a datos de prueba no idempotentes
+  (colisión de IDs entre corridas), no a un fallo real del sistema.
+- **PERF-02**: el crecimiento de latencia con la carga (2.79 ms → 30.97 ms →
+  78.73 ms) es consistente con el defecto conocido de `RegistryRepository`
+  (apertura de una conexión JDBC nueva por operación, sin pool). No se
+  incumplió el SLO en estas corridas, pero la tendencia sugiere que un
+  `soak test` prolongado o una carga sostenida mayor sí lo haría.
+
+### Próximas acciones
+
+- Agregar HikariCP (pool de conexiones) y repetir `load`/`stress` para medir
+  la mejora.
+- Ejecutar `spike` y `soak` para completar la cobertura de escenarios.
+- Corregir la generación de IDs en el escenario de stress para evitar
+  colisiones entre corridas (usar `ID_BASE` como sugiere el README del taller).
+
+---
+
+## Matriz de pruebas de rendimiento
+
+| Escenario | Modelo | Duración | SLO | Resultado | Artefactos |
+|---|---|---|---|---|---|
+| Baseline | Cerrado, 20 VUs constantes | 5 min | p95 < 300 ms | ✅ Cumple (2.79 ms) | `perf/results/summary-baseline.json` |
+| Load | Cerrado, rampa 0→200 VUs | 14 min | p95 < 300 ms, p99 < 800 ms | ✅ Cumple (p95=30.97 ms) | `perf/results/summary-load.json` |
+| Stress | Cerrado, rampa 200→600 VUs | 10 min | p95 < 300 ms, error < 1% | ⚠️ Latencia OK (78.73 ms) / Error de negocio 24.73% (ver PERF-01) | `perf/results/summary-stress.json` |
+
+---
+
 ## Créditos y uso académico
 
 **Autor:** César Augusto Vega Fernández
