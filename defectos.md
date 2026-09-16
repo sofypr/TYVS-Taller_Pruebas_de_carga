@@ -2,7 +2,7 @@
 
 Curso: Testing y Validación de Software
 Proyecto: Pruebas de Carga y Rendimiento — Registraduría
-Equipo: Sofy Alejandra Prada Murillo y Juan Camilo Estévez Otalora
+Equipo: Sofy Alejandra Prada Murillo y Juan Camilo Estévez
 Fecha: 16 de septiembre de 2026
 
 ---
@@ -110,12 +110,64 @@ Alta (riesgo de incumplimiento de SLO en producción bajo carga sostenida)
 
 ---
 
+## Defecto PERF-03 — Reutilización del dataset de votantes en CI (duplicados por diseño de prueba)
+
+- Capa afectada: Diseño de la prueba / pipeline CI (`.github/workflows/perf.yml`)
+- Escenario: Verificación de resultado de negocio (`register_voter_k6.js`), ejecutado en GitHub Actions con `--duration 60s --vus 20`
+- SLO definido: `register_failed` (rate) < 1%
+- Resultado esperado: Cumplimiento del umbral
+- Resultado obtenido: **65.48%** de resultados de negocio incorrectos (`resultado_negocio_incorrecto: 0.6548`)
+
+### Evidencia
+
+Log de CI (GitHub Actions, ejecución #2):
+
+```
+{
+  "escenario": "baseline",
+  "peticiones": 11780,
+  "p95_ms": 2,
+  "resultado_negocio_incorrecto": 0.6548387096774193
+}
+level=error msg="thresholds on metrics 'register_failed' have been crossed"
+```
+
+### Impacto
+
+`perf/data/voters.csv` tiene 512 filas. Al forzar `--duration 60s --vus 20` (en vez
+de dejar que el escenario `baseline` del script controle su propia duración/VUs),
+el job completó 11,780 iteraciones — más de 23 vueltas completas al dataset.
+Cada vez que una fila se reutiliza, el sistema responde `DUPLICATED` (correctamente,
+por la regla de unicidad), pero el script la marca como resultado de negocio
+incorrecto porque esperaba `VALID`/`UNDERAGE`/`DEAD`/`INVALID_AGE` según la fila.
+No es un defecto del sistema bajo prueba: es un defecto de diseño de la prueba
+en el pipeline de CI.
+
+### Causa probable
+
+- El workflow sobreescribe la configuración de VUs/duración del script con
+  `--duration`/`--vus`, ignorando que el dataset de referencia es finito (512 filas)
+  y se agota mucho antes de que termine el tiempo asignado.
+
+### Estado
+
+Resuelto (se cambió `--duration 60s --vus 20` por `--vus 20 --iterations 480`
+en el paso "Verificación de resultado de negocio" de `.github/workflows/perf.yml`,
+manteniendo el total de iteraciones por debajo del tamaño del dataset)
+
+### Prioridad
+
+Media
+
+---
+
 ## Formato 2: Tabla de seguimiento
 
 | ID | Escenario | Resultado esperado | Resultado obtenido | Estado | Prioridad |
 |----|-----------|--------------------|--------------------|--------|-----------|
 | PERF-01 | Stress | register_failed < 1% | 24.73% | Abierto | Media |
 | PERF-02 | Baseline→Load→Stress | p95 estable | Crecimiento ~28x (2.79ms→78.73ms) | Abierto | Alta |
+| PERF-03 | CI (verificación de negocio) | register_failed < 1% | 65.48% (dataset reutilizado) | Resuelto | Media |
 
 ---
 

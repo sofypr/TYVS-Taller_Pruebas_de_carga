@@ -75,7 +75,7 @@ jobs:
           k6 run perf/scripts/register_voter_k6.js \
             --env BASE_URL=http://localhost:8080 \
             --env SCENARIO=baseline \
-            --duration 60s --vus 20
+            --vus 20 --iterations 480
 
       # Los thresholds del script son el gate: si p95 supera el SLO o la tasa
       # de error pasa del 1%, k6 termina con código distinto de 0 y el paso
